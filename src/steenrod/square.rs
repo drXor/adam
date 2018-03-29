@@ -4,6 +4,7 @@
 //! It is, however, a useful intermediary form for when Adem reduction
 //! is too much of an overhead.
 
+use std::ops::Mul;
 use std::fmt::{Display, Formatter, Result as FResult};
 
 use std::slice::{Iter as VIter};
@@ -22,7 +23,8 @@ use super::milnor::MilnorBasis;
 #[derive(Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SquareBasis(
     // Note: there are *no* invariants on this vector, other than
-    // all elements being nonzero.
+    // all elements being nonzero. elements are stored in the same
+    // order as Cartan form
     Vec<usize>
 );
 
@@ -51,6 +53,18 @@ impl SquareBasis {
         result
     }
 }
+
+impl<'a, 'b> Mul<&'b SquareBasis> for &'a SquareBasis {
+    type Output = SquareBasis;
+
+    fn mul(self, that: &'b SquareBasis) -> Self::Output {
+        let mut res = self.clone();
+        res.0.extend(that.iter().map(|x| *x));
+        res
+    }
+}
+
+extra_mul!(SquareBasis);
 
 impl Display for SquareBasis {
     fn fmt(&self, f: &mut Formatter) -> FResult {

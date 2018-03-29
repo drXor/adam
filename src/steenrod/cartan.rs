@@ -7,8 +7,6 @@
 //! if `ij < 2i(j+1)` for all `j`. Such sequence of squares form a basis for
 //! the Steenrod algebra, the Serre-Cartan basis.
 
-use std::ops::{Add, AddAssign, Mul, Index, IndexMut};
-
 use std::fmt::{Display, Formatter, Result as FResult};
 
 use std::slice::{Iter as VIter};
@@ -181,25 +179,38 @@ mod adem {
         if sum.iter().all(admissible) {
             sum
         } else {
-            simplify(sum.into_iter()
+
+            memo!(MEMO: Vec<Vec<usize>>, Vec<Vec<usize>>);
+            memo_check!(MEMO, &sum);
+
+            let res = simplify(sum.iter()
                 .rev()
                 .fold(Vec::new(), |mut xs, x| {
-                    let mut simple = simplify_prod(&x[..]);
+                    let mut simple = simplify_prod(x.clone());
                     for op in &mut simple {
                         op.retain(|x| *x != 0)
                     }
                     xs.extend(simple);
                     xs
-                }))
+                }));
+
+            memo_return!(MEMO, sum, res);
         }
 
     }
 
-    fn simplify_prod(op: &[usize]) -> Vec<Vec<usize>> {
+    fn simplify_prod(op: Vec<usize>) -> Vec<Vec<usize>> {
+
         if op.len() <= 1 {
-            vec![op.into()]
-        } else if op[0] >= 2 * op[1] {
-            simplify_prod(&op[1..]).into_iter()
+            return vec![op];
+
+        }
+
+        memo!(MEMO: Vec<usize>, Vec<Vec<usize>>);
+        memo_check!(MEMO, &op);
+
+        let res = if op[0] >= 2 * op[1] {
+            simplify_prod(op[1..].into()).into_iter()
                 .map(|mut x| { x.insert(0, op[0]); x })
                 .collect::<Vec<_>>()
         } else {
@@ -210,6 +221,8 @@ mod adem {
                 res.push(vec);
             }
             res
-        }
+        };
+
+        memo_return!(MEMO, op, res);
     }
 }

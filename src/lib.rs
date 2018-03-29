@@ -3,12 +3,13 @@
 
 #[macro_use]
 extern crate lazy_static;
-
 extern crate linked_hash_set;
 
 #[macro_use]
 pub mod macros;
 
-pub mod module;
+#[macro_use]
+mod memoize;
 
+pub mod module;
 pub mod steenrod;

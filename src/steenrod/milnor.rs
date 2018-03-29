@@ -8,7 +8,7 @@
 //! the dual of these generators. You can obtain what power `\xi_k` is
 //! raised to with index notation: `a[k]`.
 
-use std::ops::{Add, AddAssign, Mul, Index, IndexMut};
+use std::ops::{Mul, Index};
 
 use std::fmt::{Display, Formatter, Result as FResult};
 
@@ -132,6 +132,9 @@ impl<'a, 'b> Mul<&'b MilnorBasis> for &'a MilnorBasis {
         //
         // T(X) is a vector whose entries are the sums of each skew diagonal
         // of the matrix.
+        //
+        // This whole things comes out to being polynomial time, somehow.
+        // Possibly memoize in the future?
         //
         // Reference: http://www.math.wayne.edu/~rrb/papers/adams.pdf, page 16
 
