@@ -4,3 +4,5 @@ version = "0.1.0"
 authors = ["Miguel Young <mcyoung@mit.edu>"]
 
 [dependencies]
+linked_hash_set = "0.1.2"
+lazy_static = "1.0.0"
