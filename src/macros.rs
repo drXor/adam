@@ -12,8 +12,8 @@ macro_rules! milnor {
     () => { $crate::steenrod::Milnor::zero() };
     ([$($first:expr),* $(,)*] $(+ [$($rest:expr),* $(,)*])*) => {{
         $crate::steenrod::Milnor::sum_of(vec![
-            $crate::steenrod::milnor::MilnorBasis::from_vec(vec![$($first),*]),
-            $($crate::steenrod::milnor::MilnorBasis::from_vec(vec![$($rest),*])),*
+            $crate::steenrod::milnor::MilnorBasis::new(&[$($first),*]),
+            $($crate::steenrod::milnor::MilnorBasis::new(&[$($rest),*])),*
         ])
     }};
     ($($first:expr),+ $(,)*) => { milnor!([$($first),+]) };

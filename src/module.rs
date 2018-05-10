@@ -1,18 +1,22 @@
 //! Modules over the Steenrod algebra, i.e., cohomology rings.
 
-use std::ops::{Add};
+use std::ops::{ Add, AddAssign };
 
 use std::collections::HashMap;
 
 use ::steenrod::Square;
 
-/// A free module. The data consist of a set of generators in various
+use bit_set::BitSet;
+
+/// A Steenrod module, whose underlying F2 module is free.
+///
+/// The data consist of a set of generators in various
 /// degrees, and what each cohomology operation does to those
 /// generators.
 pub struct Module {
     generators: Vec<usize>,
-    // (square, input) -> output
-    actions: HashMap<(usize, usize), Vec<usize>>,
+    // actions[generator][square] -> output
+    actions: Vec<Vec<Element>>,
 }
 
 impl Module {
@@ -22,25 +26,28 @@ impl Module {
     pub fn new(generators: Vec<usize>) -> Module {
         Module {
             generators,
-            actions: HashMap::new(),
+            actions: Vec::new(),
         }
+    }
+
+    /// Add another generator, and return the number representing it.
+    pub fn add_generator(&mut self, degree: usize) -> usize {
+        self.generators.push(degree);
+        self.actions.push(Vec::new());
+        self.generators.len() - 1
     }
 
     /// Add an action to this module, by giving what `Sq^r` for `r = square` does
     /// to the `input`th generator (outputing the sum of the generators in `output`).
-    pub fn add_action(&mut self, square: usize, input: usize, output: Vec<usize>) {
+    pub fn add_action(&mut self, square: usize, input: usize, output: Element) {
         // assert that intput is valid
         assert!(input < self.dimension(), "Generator out of bounds: {}/{}", input, self.dimension());
 
-        // assert that `output` has no repeats, and that they are all valid:
-        for i in 0..output.len() {
-            assert!(output[i] < self.dimension(), "Generator out of bounds: {}/{}", output[i], self.dimension());
-            for j in i + 1..output.len() {
-                assert!(i != j, "Repeated generator {} in output of action", i);
-            }
+        while self.actions[input].len() <= square {
+            self.actions.push(Vec::new());
         }
 
-        self.actions.insert((square, input), output);
+        self.actions[input][square] = output;
     }
 
     /// Get the dimension of this module over the Steenrod algebra.
@@ -48,6 +55,13 @@ impl Module {
     #[inline]
     pub fn dimension(&self) -> usize {
         self.generators.len()
+    }
+
+    /// Get the connectivity of this module, i.e., the lowest degree of
+    /// any generator.
+    #[inline]
+    pub fn connectivity(&self) -> usize {
+        *self.generators.iter().min().unwrap()
     }
 
     /// Count the number of generators with degree less than or equal
@@ -61,12 +75,32 @@ impl Module {
     /// This function will panic of `n >= dimension()`.
     pub fn generator(&self, n: usize) -> Element {
         assert!(n < self.dimension(), "Generator out of bounds: {}/{}", n, self.dimension());
-        Element(&self, ElementInner::Single(n))
+        Element::new(&[n])
+    }
+
+    /// Get a basis for the whole module.
+    pub fn basis(&self) -> Vec<Element> {
+        self.iter()
+            .map(|(g, _)| Element::new(&[g]))
+            .collect::<Vec<_>>()
+    }
+
+    /// Get a basis for the given degree of this module.
+    pub fn basis_at_degree(&self, degree: usize) -> Vec<Element> {
+        self.iter()
+            .filter(|&(g, d)| *d == degree)
+            .map(|(g, _)| Element::new(&[g]))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn iter(&self) -> ::std::iter::Enumerate<::std::slice::Iter<usize>> {
+        self.generators.iter().enumerate()
     }
 
     /// Get the zero element.
+    #[inline]
     pub fn zero(&self) -> Element {
-        Element(&self, ElementInner::Zero)
+        Element::new(&[])
     }
 
     /// Get the degree of the `n`th generator of this module.
@@ -77,155 +111,88 @@ impl Module {
 
 }
 
-/// An element of a module.
+/// An element of `F_2^infty`. These can be be used to
+/// simulate elements of a Steenrod module, if supplied
+/// with action data.
+// Implementation note: it's best to implement these guys
+// as packed bit vectors; after all, it's an F2 module!
 #[derive(Clone)]
-pub struct Element<'a>(&'a Module, ElementInner);
+pub struct Element(BitSet);
 
-#[derive(Clone)]
-enum ElementInner {
-    Zero,
-    Single(usize),
-    Alloc(Vec<usize>),
-}
+impl Element {
 
-impl<'a> Element<'a> {
-
-    fn from_vec(module: &'a Module, xs: Vec<usize>) -> Element {
-        Element(module, match xs.len() {
-            0 => ElementInner::Zero,
-            1 => ElementInner::Single(xs[0]),
-            _ => ElementInner::Alloc(xs),
-        })
-    }
-
-    /// Get the module this element came from.
-    #[inline]
-    pub fn module(&self) -> &Module {
-        &self.0
+    /// Create a new module as a sum of given generators
+    fn new(generators: &[usize]) -> Element {
+        Element(generators.iter().map(|x| *x).collect())
     }
 
     /// Whether this element is the zero element.
+    #[inline]
     pub fn is_zero(&self) -> bool {
-        match &self.1 {
-            &ElementInner::Zero => true,
-            _ => false,
-        }
+        self.0.is_empty()
     }
 
-    fn act_one(&self, r: usize) -> Element {
-        use self::ElementInner::*;
-        match &self.1 {
-            &Zero => self.clone(),
-            &Single(x) => {
-                match self.module().actions.get(&(r, x)) {
-                    Some(xs) => Element::from_vec(self.0, xs.clone()),
-                    None => Element(self.0, Zero),
+    fn act_one(&self, m: &Module, r: usize) -> Element {
+        let mut res = m.zero();
+        for x in &self.0 {
+            for y in &m.actions[x][r].0 {
+                if res.0.contains(y) {
+                    res.0.remove(y);
+                } else {
+                    res.0.insert(y);
                 }
-            }
-            &Alloc(ref xs) => {
-                let mut res = self.module().zero();
-                for x in xs {
-                    match self.module().actions.get(&(r, *x)) {
-                        Some(xs) => res = res + Element::from_vec(self.0, xs.clone()),
-                        None => {}
-                    }
-                }
-                res
             }
         }
+        res.0.shrink_to_fit();
+        res
     }
 
     /// Calculate the action of a Steenrod operation on
-    /// this element.
-    pub fn act(&self, x: &Square) -> Element {
-        let mut total = self.module().zero();
+    /// this element, given action data.
+    pub fn act(&self, m: &Module, x: &Square) -> Element {
+        let mut total = m.zero();
         for sq in x.iter() {
             let mut cur = self.clone();
             for r in sq.iter() {
-                /// XXX: this is here because rustc isn't
-                /// XXX: smart enough about lifetimes to realize
-                /// XXX: that self.0 *always* lives as long as &self
-                /// XXX: does, so it's fine to transmute the lifetime
-                /// XXX: into the largest one possible. most of the
-                /// XXX: problem comes from the fact that the type
-                /// XXX: system has no good way of encoding that this
-                /// XXX: element depends on a value of type Module
-                /// XXX: (i.e., no dependent types).
-                use std::mem::transmute;
-                cur = unsafe {
-                    transmute(cur.act_one(*r))
-                }
+                cur = cur.act_one(m, *r)
             }
             total = total + cur;
         }
         total
     }
 
+    /// Get a reference to the backing bitset.
+    pub fn as_ref(&self) -> &BitSet {
+        &self.0
+    }
+
+    /// Get a mutable reference to the backing bitset.
+    pub fn as_mut(&mut self) -> &mut BitSet {
+        &mut self.0
+    }
+
+    /// Convert this module element into a bitset of generators.
+    pub fn into_inner(self) -> BitSet {
+        self.0
+    }
 
 }
 
-impl<'a, 'b1, 'b2> Add<&'b1 Element<'a>> for &'b2 Element<'a> {
-    type Output = Element<'a>;
-    fn add(self, that: &'b1 Element<'a>) -> Self::Output {
-        use self::ElementInner::*;
-        match (&self.1, &that.1) {
-            (&Zero, a) => Element(self.0, a.clone()),
-            (a, &Zero) => Element(self.0, a.clone()),
-            (&Single(x), &Single(y)) =>
-                if x == y {
-                    Element(self.0, Zero)
-                } else {
-                    Element(self.0, Alloc(vec![x, y]))
-                },
-            (&Single(x), &Alloc(ref ys)) => {
-                let mut zs = ys.iter().map(|y| *y).filter(|y| *y == x).collect::<Vec<_>>();
-                if zs.len() == ys.len() {
-                    zs.push(x);
-                }
-                Element::from_vec(self.0, zs)
-            }
-            (&Alloc(ref xs), &Single(y)) => {
-                let mut zs = xs.iter().map(|x| *x).filter(|x| *x == y).collect::<Vec<_>>();
-                if zs.len() == xs.len() {
-                    zs.push(y);
-                }
-                Element::from_vec(self.0, zs)
-            }
-            (&Alloc(ref xs), &Alloc(ref ys)) => {
-                let mut zs = Vec::new();
-                for x in xs {
-                    if !ys.contains(x) {
-                        zs.push(*x);
-                    }
-                }
-                for y in ys {
-                    if !xs.contains(y) {
-                        zs.push(*y);
-                    }
-                }
-                Element::from_vec(self.0, zs)
-            }
-        }
+impl<'b1, 'b2> Add<&'b1 Element> for &'b2 Element {
+    type Output = Element;
+    #[inline]
+    fn add(self, that: &'b1 Element) -> Self::Output {
+        let mut res = self.clone();
+        res += that;
+        res
     }
 }
 
-impl<'a, 'b> Add<&'b Element<'a>> for Element<'a> {
-    type Output = Element<'a>;
-    fn add(self, that: &'b Element<'a>) -> Self::Output {
-        &self + that
+impl<'b1> AddAssign<&'b1 Element> for Element {
+    #[inline]
+    fn add_assign(&mut self, that: &'b1 Element) {
+        self.0.symmetric_difference_with(&that.0);
     }
 }
 
-impl<'a, 'b> Add<Element<'a>> for &'b Element<'a> {
-    type Output = Element<'a>;
-    fn add(self, that: Element<'a>) -> Self::Output {
-        self + &that
-    }
-}
-
-impl<'a> Add<Element<'a>> for Element<'a> {
-    type Output = Element<'a>;
-    fn add(self, that: Element<'a>) -> Self::Output {
-        &self + &that
-    }
-}
+vector_add_extra!(Element);

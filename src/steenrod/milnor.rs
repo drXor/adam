@@ -14,6 +14,8 @@ use std::fmt::{Display, Formatter, Result as FResult};
 
 use linked_hash_set::{LinkedHashSet, Iter as LHSIter};
 
+use bit_set::BitSet;
+
 use super::{Cartan, Square};
 
 #[inline]
@@ -21,93 +23,185 @@ fn generator_degree(r: usize) -> usize {
     (2 << r) - 1
 }
 
+fn d(k: usize, n: usize) -> usize {
+    /*if k <= 2 {
+        return 1 + n / 3
+    } else {
+        memo!(MEMO: (usize, usize), usize);
+        memo_check!(MEMO, &(n, k));
+        let mut sum = 0;
+        loop {
+            sum += d(k - 1, n);
+            if n < generator_degree(k - 1) {
+                break
+            } else {
+                n -= generator_degree(k - 1);
+            }
+        }
+        memo_return!(MEMO, (n, k), sum);
+    }*/
+    powers_of_degree(n).iter()
+        .filter(|xs| xs.len() <= k).count()
+}
+
+fn powers_of_degree(deg: usize) -> Vec<Vec<usize>> {
+
+    use std::mem;
+
+    memo!(MEMO: usize, Vec<Vec<usize>>);
+    memo_check!(MEMO, &deg);
+
+    let mut vec = Vec::new();
+    let mut cur = vec![deg];
+    vec.push(cur.clone());
+
+    let max = mem::size_of::<usize>() * 8 - 1; // KLUDGE
+
+    'a: loop {
+        for i in 1..max {
+            if cur[0] >= generator_degree(i) {
+                cur[0] -= generator_degree(i);
+                if i >= cur.len() {
+                    cur.push(1);
+                } else {
+                    cur[i] += 1;
+                }
+                vec.push(cur.clone());
+                continue 'a
+            } else {
+                if i < cur.len() {
+                    cur[0] += cur[i] * generator_degree(i);
+                    cur[i] = 0;
+                }
+            }
+        }
+        break
+    }
+
+    //println!("{}: {:?}", deg, vec);
+
+    memo_return!(MEMO, deg, vec);
+}
+
+fn dim_of_degree(deg: usize) -> usize {
+
+    use std::mem;
+
+    memo!(MEMO: usize, usize);
+    memo_check!(MEMO, &deg);
+
+    memo_return!(MEMO, deg, powers_of_degree(deg).len());
+}
+
+const CHUNK_WIDTH: usize = 4;
+const CHUNK_DATA_WIDTH: usize = 3;
+const CHUNK_SIG_MASK: u32 = 0x8;
+const CHUNK_DATA_MASK: u32 = 0x7;
+
+fn compress_milnor(mut deg: u32, mut basis_num: u32) -> u64 {
+    let mut res: u64 = 0;
+    let mut shift = CHUNK_WIDTH;
+    res |= CHUNK_SIG_MASK as u64;
+    res |= (CHUNK_DATA_MASK & deg) as u64;
+    deg >>= CHUNK_DATA_WIDTH;
+    while deg != 0 {
+        res <<= CHUNK_WIDTH;
+        res |= (CHUNK_DATA_MASK & deg) as u64;
+        deg >>= CHUNK_DATA_WIDTH;
+        shift += CHUNK_WIDTH;
+    }
+    res |= (basis_num as u64) << shift;
+    res
+}
+
+fn decompress_milnor(mut n: u64) -> (u32, u32) {
+    let mut deg = 0;
+    loop {
+        deg |= (CHUNK_DATA_MASK & (n as u32));
+        let done = (n as u32) & CHUNK_SIG_MASK != 0;
+        n >>= CHUNK_WIDTH;
+        if done {
+            break
+        } else {
+            deg <<= CHUNK_DATA_WIDTH;
+        }
+    }
+    (deg, n as u32)
+}
+
 /// A basis element of the Steenrod algebra, encoded in the Milnor basis.
+// Implementation note: because each degree of A is finite, we can encode
+// this as two ints: a degree, and which basis element of that slice of A
+// it corresponds to.
 #[derive(Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MilnorBasis(
-    // important invariant: this vector should never have leading zeroes!
-    Vec<usize>
-);
+pub struct MilnorBasis {
+    // the degree of this basis element, given by
+    // deg Sq^(r1,...,rk) = sum_i ri (2^i - 1)
+    deg: usize,
+
+    // the index of this element in the basis
+    basis_number: usize,
+}
 
 impl MilnorBasis {
 
     /// Create a new operation from powers for an explicit Milnor basis.
-    #[inline]
     pub fn new(powers: &[usize]) -> MilnorBasis {
-        MilnorBasis::from_vec(powers.into())
-    }
 
-    /// Create a new operation from an existing allocation.
-    pub fn from_vec(vec: Vec<usize>) -> MilnorBasis {
-        let mut op = MilnorBasis(vec);
-        op.trim();
-        op
-    }
-
-    #[inline]
-    fn trim(&mut self) {
-        while let Some(&0) = self.0.last() {
-            self.0.pop();
+        let mut deg = 0;
+        for (i, x) in powers.iter().enumerate() {
+            deg += x * generator_degree(i);
         }
+
+        let mut deg1 = deg;
+
+        if powers.len() <= 1 {
+            return MilnorBasis {
+                deg,
+                basis_number: 0,
+            }
+        }
+
+        let powers = powers.into();
+
+        memo!(MEMO: Vec<usize>, MilnorBasis);
+        memo_check!(MEMO, &powers);
+
+        let mut sum = 0;
+        if powers.len() > 1 {
+            for (i, x) in powers[2..].iter().rev().enumerate() {
+                for _ in 0..*x {
+                    sum += d(i, deg1);
+                    deg1 -= generator_degree(i);
+                }
+            }
+        }
+
+        memo_return!(MEMO, powers, MilnorBasis {
+            deg: deg,
+            basis_number: sum + powers[1],
+        });
+    }
+
+    /// Get the power representation `Sq^(r1,...,rk)` of this
+    /// basis element.
+    pub fn powers(&self) -> Vec<usize> {
+        //println!("{:?}", self);
+        powers_of_degree(self.deg).swap_remove(self.basis_number)
+
     }
 
     /// The degree of this basis element in the Steenrod algebra.
-    pub fn degree(&self) -> usize {
-        let mut deg = 0;
-        for (i, r) in self.0.iter().enumerate() {
-            deg += r * generator_degree(i);
-        }
-        deg
-    }
-
-    /// Create a new iterator
-    pub fn iter(&self) -> MilnorBasisIter {
-        MilnorBasisIter { cur: self.clone() }
-    }
-
-    /// The length of this basis element, i.e. the largest `\xi_k`
-    /// needed to represent it.
     #[inline]
-    pub fn len(&self) -> usize {
-        self.0.len()
-        /*self.0.iter()
-            .enumerate()
-            .rev()
-            .find(|&(_, r)| *r != 0)
-            .map(|(i, _)| i + 1)
-            .unwrap_or(0)*/
+    pub fn degree(&self) -> usize {
+        self.deg
     }
 
     /// Convert this basis element into a Milnor sum.
     pub fn into_sum(self) -> Milnor {
-        let mut result = Milnor::zero();
-        result.0.insert(self);
-        result
-    }
-
-    /// Sets the power of the generator dual `\xi_k`  to
-    /// `power`. We implement this rather than `IndexMut` for
-    /// technical reasons.
-    pub fn set_power(&mut self, k: usize, power: usize) {
-        if k < self.len() {
-            self.0[k] = power;
-            self.trim();
-        } else if power > 0 {
-            for _ in self.len() .. k {
-                self.0.push(0)
-            }
-            self.0.push(power);
-        }
-    }
-}
-
-impl Index<usize> for MilnorBasis {
-    type Output = usize;
-    fn index(&self, index: usize) -> &Self::Output {
-        if self.0.len() <= index {
-            &0
-        } else {
-            &self.0[index]
-        }
+        let mut res = Milnor::zero();
+        res += self;
+        res
     }
 }
 
@@ -140,19 +234,22 @@ impl<'a, 'b> Mul<&'b MilnorBasis> for &'a MilnorBasis {
 
         use std::cmp::min;
 
-        let max_rows = self.len();
-        let max_cols = that.len();
+        let self_powers = self.powers();
+        let that_powers = that.powers();
+
+        let max_rows = self_powers.len();
+        let max_cols = that_powers.len();
 
         // allocate space for the matrix. we're going to get the most
         // we can out of this memory
         let mut matrix = vec![vec![0; max_cols + 1]; max_rows + 1];
 
         for i in 0..max_rows {
-            matrix[i + 1][0] = self[i]
+            matrix[i + 1][0] = self_powers[i]
         }
 
         for i in 0..max_cols {
-            matrix[0][i + 1] = that[i]
+            matrix[0][i + 1] = that_powers[i]
         }
 
         let mut result = Milnor::zero();
@@ -206,7 +303,7 @@ impl<'a, 'b> Mul<&'b MilnorBasis> for &'a MilnorBasis {
         loop {
             if next_sq(max_rows, max_cols, &mut scratch, &matrix) {
                 // we don't need to validate mod 2 addition
-                result.0.insert(MilnorBasis::from_vec(scratch.clone()));
+                result += MilnorBasis::new(&scratch[..]);
             }
 
             if next_matrix(max_rows, max_cols, &mut matrix) {
@@ -222,41 +319,7 @@ extra_mul!(MilnorBasis);
 
 impl Display for MilnorBasis {
     fn fmt(&self, f: &mut Formatter) -> FResult {
-        write!(f, "Sq({})", self.0.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join(", "))
-    }
-}
-
-/// An iterator on the Milnor basis. Iteration is performed in
-/// lexicographic order of the generators.
-pub struct MilnorBasisIter {
-    cur: MilnorBasis,
-}
-
-impl Iterator for MilnorBasisIter {
-
-    type Item = MilnorBasis;
-    fn next(&mut self) -> Option<Self::Item> {
-        {
-            let next = &mut self.cur;
-            for i in 0.. {
-                if next.0.len() <= i {
-                    next.0.push(0)
-                }
-                if next.0[0] >= generator_degree(i) {
-                    next.0[0] -= generator_degree(i);
-                    next.0[i] += 1;
-                    break
-                } else {
-                    next.0[0] += next.0[i] * generator_degree(i);
-                    next.0[i] = 0;
-                }
-            }
-            while next.0.len() > 1 && *next.0.last().unwrap() == 0 {
-                next.0.pop();
-            }
-        }
-        self.cur.trim();
-        Some(self.cur.clone())
+        write!(f, "Sq({})", self.powers().iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join(", "))
     }
 }
 
@@ -265,14 +328,27 @@ impl Iterator for MilnorBasisIter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Milnor(
     // we can use a hashset, since this is a sum mod 2
-    LinkedHashSet<MilnorBasis>,
+    //LinkedHashSet<MilnorBasis>,
+    BitSet
 );
 
 impl Milnor {
 
     /// Get the zero element in this basis.
     pub fn zero() -> Milnor {
-        Milnor(LinkedHashSet::new())
+        Milnor(BitSet::new())
+    }
+
+    pub fn dimension_of_degree(deg: usize) -> usize {
+        dim_of_degree(deg)
+    }
+
+    pub fn basis_of_degree(deg: usize) -> Vec<MilnorBasis> {
+        let mut vec = Vec::new();
+        for i in 0..dim_of_degree(deg) {
+            vec.push(MilnorBasis { deg, basis_number: i });
+        }
+        vec
     }
 
     /// Create a new element as a sum of Milnor basis elements.
@@ -287,8 +363,8 @@ impl Milnor {
     }
 
     /// An iterator over the summands of this Steenrod element.
-    pub fn iter(&self) -> LHSIter<MilnorBasis> {
-        self.0.iter()
+    pub fn iter(&self) -> MilnorIter {
+        MilnorIter { inner: self.0.iter() }
     }
 
     /// Convert this Steenrod element to the Cartan basis.
@@ -303,13 +379,13 @@ impl Milnor {
             while !orig.0.is_empty() {
                 // pick a basis element from the sum
                 // TODO: make this not clone()
-                let op = orig.0.iter().next().unwrap().clone();
+                let op = orig.iter().next().unwrap().powers();
                 let len = op.len();
                 match len {
                     0 => {} // it's just a one
                     1 => {
                         total.push(vec![op[0]]);
-                        orig += op;
+                        orig += MilnorBasis::new(&op[..]);
                     }
                     _ => {
                         // op = Sq(r1,...,rk), then
@@ -320,14 +396,15 @@ impl Milnor {
                         // add Sq(r) * rr to total and subtract it from orig
                         let mut last = op[len - 1];
                         let mut rr = op.clone();
-                        rr.set_power(len - 1, 0);
+                        rr[len - 1] = 0;
                         let rr2 = rr[len - 2] + last;
-                        rr.set_power(len - 2, rr2);
+                        rr[len - 2] = rr2;
                         last <<= len - 1;
 
                         let s = MilnorBasis::new(&[last]);
-                        orig += s * &rr;
-                        let mut y = inner(rr.into_sum());
+                        let rr_m = MilnorBasis::new(&rr);
+                        orig += s * &rr_m;
+                        let mut y = inner(rr_m.into_sum());
 
                         total.extend(y.iter().map(|op| {
                             let mut op = op.clone();
@@ -343,14 +420,61 @@ impl Milnor {
     }
 }
 
-vector_additon!(Milnor, Milnor, MilnorBasis, MilnorBasis::clone);
+/// Iterator over a Milnor element.
+pub struct MilnorIter<'a> {
+    inner: ::bit_set::Iter<'a, u32>,
+}
+
+impl<'a> Iterator for MilnorIter<'a> {
+    type Item = MilnorBasis;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|x| {
+            let (n, k) = decompress_milnor(x as u64);
+            MilnorBasis { deg: n as usize, basis_number: k as usize }
+        })
+    }
+}
+
+use std::ops::{ Add, AddAssign };
+
+impl<'b> AddAssign<&'b Milnor> for Milnor {
+    #[inline]
+    fn add_assign(&mut self, that: &'b Milnor) {
+        self.0.symmetric_difference_with(&that.0);
+    }
+}
+
+impl<'b> AddAssign<MilnorBasis> for Milnor {
+    #[inline]
+    fn add_assign(&mut self, rhs: MilnorBasis) {
+        let key = compress_milnor(rhs.deg as u32, rhs.basis_number as u32) as usize;
+        if self.0.contains(key) {
+            self.0.remove(key);
+        } else {
+            self.0.insert(key);
+        }
+    }
+}
+
+impl<'a, 'b> Add<&'b Milnor> for &'a Milnor {
+    type Output = Milnor;
+    #[inline]
+    fn add(self, that: &'b Milnor) -> Milnor {
+        let mut res = self.clone();
+        res += that;
+        res
+    }
+}
+
+vector_add_extra!(Milnor);
+vector_mul!(Milnor);
 
 impl Display for Milnor {
     fn fmt(&self, f: &mut Formatter) -> FResult {
         if self.0.is_empty() {
             write!(f, "0")
         } else {
-            let mut copy = self.0.iter().map(MilnorBasis::clone).collect::<Vec<_>>();
+            let mut copy = self.iter().map(|x| x.clone()).collect::<Vec<_>>();
             copy.sort();
             write!(f, "{}", copy.iter()
                 .map(|op| format!("{}", op))

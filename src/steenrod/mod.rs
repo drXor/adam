@@ -4,9 +4,6 @@
 //! `H^*(X; F_2) -> H^*(X; F_2)` for some space `X`, though
 //! its structure is independent of this space.
 
-#[macro_use]
-pub mod internal_macros;
-
 pub mod cartan;
 pub mod milnor;
 pub mod square;
